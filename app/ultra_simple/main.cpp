@@ -28,7 +28,9 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
-
+#include <opencv2/opencv.hpp>
+#include <cmath>
+#include <vector>
 #include "sl_lidar.h" 
 #include "sl_lidar_driver.h"
 #ifndef _countof
@@ -40,6 +42,10 @@
 #define delay(x)   ::Sleep(x)
 #else
 #include <unistd.h>
+struct LiDARPoint {
+    float theta;  // Angle in degrees
+    float distance;  // Distance in meters or mm
+};
 static inline void delay(sl_word_size_t ms){
     while (ms>=1000){
         usleep(1000*1000);
@@ -84,18 +90,35 @@ bool checkSLAMTECLIDARHealth(ILidarDriver * drv)
     } else {
         fprintf(stderr, "Error, cannot retrieve the lidar health code: %x\n", op_result);
         return false;
-    }
 }
-
+}
 bool ctrl_c_pressed;
 void ctrlc(int)
 {
     ctrl_c_pressed = true;
 }
+void drawLidarData(const std::vector<LiDARPoint>& points) {
+    int imgSize = 1000;
+    cv::Mat image = cv::Mat::zeros(imgSize, imgSize, CV_8UC3);
+    cv::Point center(imgSize / 2, imgSize / 2);
+    for (const auto& point : points) {
+        float rad = point.theta * CV_PI / 180.0;
+        int x = center.x + static_cast<int>(point.distance * cos(rad));
+        int y = center.y + static_cast<int>(point.distance * sin(rad));  // Invert y-axis
+	//std::cout<<"X coord: "<< x<<"Y coord: "<<y<<std::endl;
+        cv::circle(image, cv::Point(x, y), 2, cv::Scalar(0, 255, 0), -1);
+    }
+    // Draw the center point (0,0) as a red dot
+    cv::circle(image, center, 3, cv::Scalar(0, 0, 255), -1);  // Center point (0, 0)
+
+    cv::imshow("LiDAR Scan", image);
+    cv::waitKey(1);
+}
 
 int main(int argc, const char * argv[]) {
 	const char * opt_is_channel = NULL; 
 	const char * opt_channel = NULL;
+    std::vector<LiDARPoint> points;
     const char * opt_channel_param_first = NULL;
 	sl_u32         opt_channel_param_second = 0;
     sl_u32         baudrateArray[2] = {115200, 256000};
@@ -136,22 +159,6 @@ int main(int argc, const char * argv[]) {
 			opt_channel_param_first = argv[3];//or set to a fixed value: e.g. "192.168.11.2"
 			if (argc>4) opt_channel_param_second = strtoul(argv[4], NULL, 10);//e.g. "8089"
 			opt_channel_type = CHANNEL_TYPE_UDP;
-		}
-		else
-		{
-			print_usage(argc, argv);
-			return -1;
-		}
-	}
-	else
-	{
-		print_usage(argc, argv);
-        return -1;
-	}
-
-	if(opt_channel_type == CHANNEL_TYPE_SERIALPORT)
-	{
-		if (!opt_channel_param_first) {
 #ifdef _WIN32
 		// use default com port
 		opt_channel_param_first = "\\\\.\\com3";
@@ -266,6 +273,7 @@ int main(int argc, const char * argv[]) {
     drv->startScan(0,1);
 
     // fetech result and print it out...
+    float theta, dist;
     while (1) {
         sl_lidar_response_measurement_node_hq_t nodes[8192];
         size_t   count = _countof(nodes);
@@ -275,11 +283,16 @@ int main(int argc, const char * argv[]) {
         if (SL_IS_OK(op_result)) {
             drv->ascendScanData(nodes, count);
             for (int pos = 0; pos < (int)count ; ++pos) {
+		theta = nodes[pos].angle_z_q14 * 90.f / 16384.f;
+		dist = nodes[pos].dist_mm_q2/4.0f;
+		points.push_back({theta, dist});
+  
                 printf("%s theta: %03.2f Dist: %08.2f Q: %d \n", 
                     (nodes[pos].flag & SL_LIDAR_RESP_HQ_FLAG_SYNCBIT) ?"S ":"  ", 
-                    (nodes[pos].angle_z_q14 * 90.f) / 16384.f,
-                    nodes[pos].dist_mm_q2/4.0f,
+                    theta,
+                    dist,
                     nodes[pos].quality >> SL_LIDAR_RESP_MEASUREMENT_QUALITY_SHIFT);
+		drawLidarData(points);
             }
         }
 
@@ -301,3 +314,19 @@ on_finished:
     return 0;
 }
 
+/*
+ *  SLAMTEC LIDAR
+ *  Ultra Simple Data Grabber Demo App
+ *
+ *  Copyright (c) 2009 - 2014 RoboPeak Team
+ *  http://www.robopeak.com
+ *  Copyright (c) 2014 - 2020 Shanghai Slamtec Co., Ltd.
+ *  http://www.slamtec.com
+ *
+ */
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ **/

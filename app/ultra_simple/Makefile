@@ -25,9 +25,11 @@ include $(HOME_TREE)/mak_def.inc
 
 CXXSRC += main.cpp
 C_INCLUDES += -I$(CURDIR)/../../sdk/include -I$(CURDIR)/../../sdk/src
+LDFLAGS += -lm
 
 EXTRA_OBJ := 
 LD_LIBS += -lstdc++ -lpthread
+LDFLAGS += -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_imgcodecs -lopencv_videoio
 
 all: build_app
 

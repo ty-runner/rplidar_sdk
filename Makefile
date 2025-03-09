@@ -35,6 +35,7 @@
 HOME_TREE := .
 
 MAKE_TARGETS := sdk app
+LDFLAGS += -lm
 
 include $(HOME_TREE)/mak_def.inc
 
