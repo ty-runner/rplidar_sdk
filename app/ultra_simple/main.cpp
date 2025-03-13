@@ -97,34 +97,21 @@ void ctrlc(int)
 {
     ctrl_c_pressed = true;
 }
-void drawLidarData(const std::vector<LiDARPoint>& points) {
-    int imgSize = 1000;
-    cv::Mat image = cv::Mat::zeros(imgSize, imgSize, CV_8UC3);
-    cv::Point center(imgSize / 2, imgSize / 2);
-    for (const auto& point : points) {
-        float rad = point.theta * CV_PI / 180.0;
-        int x = center.x + static_cast<int>(point.distance * cos(rad));
-        int y = center.y + static_cast<int>(point.distance * sin(rad));  // Invert y-axis
-	//std::cout<<"X coord: "<< x<<"Y coord: "<<y<<std::endl;
-        cv::circle(image, cv::Point(x, y), 2, cv::Scalar(0, 255, 0), -1);
-    }
-    // Draw the center point (0,0) as a red dot
-    cv::circle(image, center, 3, cv::Scalar(0, 0, 255), -1);  // Center point (0, 0)
-
-    cv::imshow("LiDAR Scan", image);
-    cv::waitKey(1);
-}
 
 int main(int argc, const char * argv[]) {
 	const char * opt_is_channel = NULL; 
 	const char * opt_channel = NULL;
-    std::vector<LiDARPoint> points;
     const char * opt_channel_param_first = NULL;
 	sl_u32         opt_channel_param_second = 0;
     sl_u32         baudrateArray[2] = {115200, 256000};
     sl_result     op_result;
 	int          opt_channel_type = CHANNEL_TYPE_SERIALPORT;
 
+    float theta, dist;
+    int imgSize = 1000;
+    cv::Mat image = cv::Mat::zeros(imgSize, imgSize, CV_8UC3);
+    cv::Point center(imgSize / 2, imgSize / 2);
+    cv::circle(image, center, 3, cv::Scalar(0, 0, 255), -1);  // Center point (0, 0)
 	bool useArgcBaudrate = false;
 
     IChannel* _channel;
@@ -273,7 +260,6 @@ int main(int argc, const char * argv[]) {
     drv->startScan(0,1);
 
     // fetech result and print it out...
-    float theta, dist;
     while (1) {
         sl_lidar_response_measurement_node_hq_t nodes[8192];
         size_t   count = _countof(nodes);
@@ -285,20 +271,26 @@ int main(int argc, const char * argv[]) {
             for (int pos = 0; pos < (int)count ; ++pos) {
 		theta = nodes[pos].angle_z_q14 * 90.f / 16384.f;
 		dist = nodes[pos].dist_mm_q2/4.0f;
-		points.push_back({theta, dist});
-  
-                printf("%s theta: %03.2f Dist: %08.2f Q: %d \n", 
-                    (nodes[pos].flag & SL_LIDAR_RESP_HQ_FLAG_SYNCBIT) ?"S ":"  ", 
-                    theta,
-                    dist,
-                    nodes[pos].quality >> SL_LIDAR_RESP_MEASUREMENT_QUALITY_SHIFT);
-		drawLidarData(points);
+        float dist_cm = dist / 10;
+        LiDARPoint point = {theta, dist_cm};
+        float rad = point.theta * CV_PI / 180.0;
+        int x = center.x + static_cast<int>(point.distance * cos(rad));
+        int y = center.y + static_cast<int>(point.distance * sin(rad));
+        cv::circle(image, cv::Point(x, y), 2, cv::Scalar(0, 255, 0), -1);
+        printf("%s theta: %03.2f Dist: %08.2f Q: %d \n", 
+            (nodes[pos].flag & SL_LIDAR_RESP_HQ_FLAG_SYNCBIT) ?"S ":"  ", 
+            theta,
+            dist,
+            nodes[pos].quality >> SL_LIDAR_RESP_MEASUREMENT_QUALITY_SHIFT);
             }
         }
 
         if (ctrl_c_pressed){ 
             break;
         }
+
+        cv::imshow("LiDAR Scan", image);
+        cv::waitKey(1);
     }
 
     drv->stop();
