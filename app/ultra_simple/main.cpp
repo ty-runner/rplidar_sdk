@@ -23,11 +23,14 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-
+#include <iostream>
+#include <chrono>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
+#include <stdio.h>
+#include <time.h>
 #include <opencv2/opencv.hpp>
 #include <cmath>
 #include <vector>
@@ -42,10 +45,30 @@
 #define delay(x)   ::Sleep(x)
 #else
 #include <unistd.h>
+
+void measure_delay(float* delays);
 struct LiDARPoint {
     float theta;  // Angle in degrees
     float distance;  // Distance in meters or mm
 };
+
+void measure_delay(float* delays, int size){
+    float min = 10000;
+    float max = 0;
+    float avg = 0;
+    for(int i = 0; i < size; i++){
+        if(delays[i] < min && (delays[i] > 0.0000001)) min = delays[i];
+        if(delays[i] > max){ 
+            max = delays[i];
+            printf("MAX AT %d\n", i);
+        }
+        avg += delays[i];
+    }
+    avg /= size;
+    printf("Minimum delay over %d samples: %f\n", size, min);
+    printf("Mamimum delay over %d samples: %f\n", size, max);
+    printf("Average delay over %d samples: %f\n", size, avg);
+}
 static inline void delay(sl_word_size_t ms){
     while (ms>=1000){
         usleep(1000*1000);
@@ -103,11 +126,14 @@ int main(int argc, const char * argv[]) {
 	const char * opt_channel = NULL;
     const char * opt_channel_param_first = NULL;
 	sl_u32         opt_channel_param_second = 0;
-    sl_u32         baudrateArray[2] = {115200, 256000};
+    sl_u32         baudrateArray[3] = {115200, 256000, 460800};
     sl_result     op_result;
 	int          opt_channel_type = CHANNEL_TYPE_SERIALPORT;
-
+    struct timespec previous_time, current_time;
     float theta, dist;
+    float* delays;
+    int size = 0;
+    int capacity = 1;
     int imgSize = 1000;
     cv::Mat image = cv::Mat::zeros(imgSize, imgSize, CV_8UC3);
     cv::Point center(imgSize / 2, imgSize / 2);
@@ -118,7 +144,7 @@ int main(int argc, const char * argv[]) {
 
     printf("Ultra simple LIDAR data grabber for SLAMTEC LIDAR.\n"
            "Version: %s\n", SL_LIDAR_SDK_VERSION);
-
+    using namespace std::chrono;
 	 
 	if (argc>1)
 	{ 
@@ -259,29 +285,45 @@ int main(int argc, const char * argv[]) {
     // start scan...
     drv->startScan(0,1);
 
+    clock_gettime(CLOCK_MONOTONIC, &previous_time);
+    delays = (float* )malloc(capacity * sizeof(float));
     // fetech result and print it out...
-    while (1) {
+    while (size < 1000) { //was while(1)
         sl_lidar_response_measurement_node_hq_t nodes[8192];
         size_t   count = _countof(nodes);
-
+        
+        clock_gettime(CLOCK_MONOTONIC, &current_time);
         op_result = drv->grabScanDataHq(nodes, count);
-
+        double elapsed = (current_time.tv_sec - previous_time.tv_sec) + (current_time.tv_nsec - previous_time.tv_nsec) / 1e9;
+        printf("Time since last measurement: %0.6f\n", elapsed);
+        if (size >= capacity){
+            capacity *= 2;
+            delays = (float *)realloc(delays, capacity * sizeof(float));
+        }
+        if(size <= 1){
+            size++;
+        }
+        else{
+            delays[size++] = elapsed;
+        }
+        previous_time = current_time;
         if (SL_IS_OK(op_result)) {
             drv->ascendScanData(nodes, count);
             for (int pos = 0; pos < (int)count ; ++pos) {
 		theta = nodes[pos].angle_z_q14 * 90.f / 16384.f;
 		dist = nodes[pos].dist_mm_q2/4.0f;
-        float dist_cm = dist / 10;
+        if(theta < 10 && dist < 500) printf("DANGER\n"); //in front of unit < 50 centimeters
+        float dist_cm = dist / 5; //tweak ratio for 2D mapper
         LiDARPoint point = {theta, dist_cm};
         float rad = point.theta * CV_PI / 180.0;
         int x = center.x + static_cast<int>(point.distance * cos(rad));
         int y = center.y + static_cast<int>(point.distance * sin(rad));
         cv::circle(image, cv::Point(x, y), 2, cv::Scalar(0, 255, 0), -1);
-        printf("%s theta: %03.2f Dist: %08.2f Q: %d \n", 
+        /*printf("%s theta: %03.2f Dist: %08.2f Q: %d \n", 
             (nodes[pos].flag & SL_LIDAR_RESP_HQ_FLAG_SYNCBIT) ?"S ":"  ", 
             theta,
             dist,
-            nodes[pos].quality >> SL_LIDAR_RESP_MEASUREMENT_QUALITY_SHIFT);
+            nodes[pos].quality >> SL_LIDAR_RESP_MEASUREMENT_QUALITY_SHIFT);*/
             }
         }
 
@@ -293,6 +335,8 @@ int main(int argc, const char * argv[]) {
         cv::waitKey(1);
     }
 
+    measure_delay(delays, size);
+    free(delays);
     drv->stop();
 	delay(200);
 	if(opt_channel_type == CHANNEL_TYPE_SERIALPORT)
